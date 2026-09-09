@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import Chore, Completion, Member, RotationSlot
+from .models import Chore, Completion, Member, RotationSlot, Swap
 
 
 class RotationSlotInline(admin.TabularInline):
@@ -31,3 +31,10 @@ class CompletionAdmin(admin.ModelAdmin):
     list_filter = ("chore", "member")
     date_hierarchy = "completed_at"
     list_select_related = ("chore", "member")
+
+
+@admin.register(Swap)
+class SwapAdmin(admin.ModelAdmin):
+    list_display = ("chore", "period_key", "from_member", "to_member", "created_at")
+    list_filter = ("chore",)
+    list_select_related = ("chore", "from_member", "to_member")

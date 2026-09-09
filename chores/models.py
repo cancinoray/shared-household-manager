@@ -125,3 +125,53 @@ class Completion(models.Model):
                 self.chore.frequency, self.completed_at
             )
         super().save(*args, **kwargs)
+
+
+class Swap(models.Model):
+    """A one-off trade of a single upcoming turn for one chore.
+
+    A ``Swap`` row overrides the computed whose-turn result (#5) for exactly
+    one chore in exactly one period. ``period_key`` uses the same format as
+    :func:`chores.periods.period_key` (``"2026-09-10"`` daily, ``"2026-W37"``
+    weekly). :func:`chores.rotation.responsible_member` applies the override
+    on top of the base rotation.
+
+    ``UniqueConstraint(chore, period_key)`` allows at most one swap per chore
+    per period. The board UI (#15) upserts with ``update_or_create``; issuing
+    a second plain ``Swap.objects.create`` for the same chore + period raises
+    ``IntegrityError``.
+
+    ``CheckConstraint`` forbids ``from_member == to_member`` -- a swap must
+    move the turn to a different person.
+    """
+
+    chore = models.ForeignKey(
+        Chore, on_delete=models.CASCADE, related_name="swaps"
+    )
+    period_key = models.CharField(max_length=16)
+    from_member = models.ForeignKey(
+        Member, on_delete=models.PROTECT, related_name="swaps_out"
+    )
+    to_member = models.ForeignKey(
+        Member, on_delete=models.PROTECT, related_name="swaps_in"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["chore", "period_key"],
+                name="unique_swap_per_chore_period",
+            ),
+            models.CheckConstraint(
+                condition=~models.Q(from_member=models.F("to_member")),
+                name="swap_from_member_ne_to_member",
+            ),
+        ]
+
+    def __str__(self):
+        return (
+            f"{self.chore.name} {self.period_key}: "
+            f"{self.from_member.name} -> {self.to_member.name}"
+        )

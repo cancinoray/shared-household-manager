@@ -1,4 +1,4 @@
-from datetime import date, datetime, timedelta, timezone as dt_timezone
+from datetime import date, datetime, time, timedelta, timezone as dt_timezone
 from io import StringIO
 
 from django.core.exceptions import ValidationError
@@ -8,10 +8,10 @@ from django.db.models.deletion import ProtectedError
 from django.test import TestCase
 from django.urls import reverse
 
-from .models import Chore, Completion, Member, RotationSlot
+from .models import Chore, Completion, Member, RotationSlot, Swap
 from .periods import period_key
 from .presets import PRESET_CHORES
-from .rotation import whose_turn
+from .rotation import responsible_member, whose_turn
 
 
 class SmokeTest(TestCase):
@@ -396,3 +396,160 @@ class CompletionQueryHelpersTest(TestCase):
         self.assertTrue(
             Completion.objects.completed_in_current_period(self.daily, reference)
         )
+
+
+class SwapModelTest(TestCase):
+    def setUp(self):
+        self.chore = Chore.objects.create(
+            name="Vacuum", frequency=Chore.Frequency.WEEKLY
+        )
+        self.sam = Member.objects.create(name="Sam")
+        self.alex = Member.objects.create(name="Alex")
+        self.jo = Member.objects.create(name="Jo")
+
+    def test_str_is_readable(self):
+        swap = Swap.objects.create(
+            chore=self.chore,
+            period_key="2026-W37",
+            from_member=self.sam,
+            to_member=self.alex,
+        )
+        self.assertEqual(str(swap), "Vacuum 2026-W37: Sam -> Alex")
+
+    def test_from_member_equal_to_to_member_raises_integrity_error(self):
+        with self.assertRaises(IntegrityError):
+            Swap.objects.create(
+                chore=self.chore,
+                period_key="2026-W37",
+                from_member=self.sam,
+                to_member=self.sam,
+            )
+
+    def test_second_create_for_same_chore_and_period_raises_integrity_error(self):
+        Swap.objects.create(
+            chore=self.chore,
+            period_key="2026-W37",
+            from_member=self.sam,
+            to_member=self.alex,
+        )
+        with self.assertRaises(IntegrityError):
+            Swap.objects.create(
+                chore=self.chore,
+                period_key="2026-W37",
+                from_member=self.sam,
+                to_member=self.jo,
+            )
+
+    def test_update_or_create_replaces_the_swap_for_the_same_period(self):
+        Swap.objects.create(
+            chore=self.chore,
+            period_key="2026-W37",
+            from_member=self.sam,
+            to_member=self.alex,
+        )
+        obj, created = Swap.objects.update_or_create(
+            chore=self.chore,
+            period_key="2026-W37",
+            defaults={"from_member": self.sam, "to_member": self.jo},
+        )
+        self.assertFalse(created)
+        self.assertEqual(
+            Swap.objects.filter(chore=self.chore, period_key="2026-W37").count(), 1
+        )
+        self.assertEqual(obj.to_member, self.jo)
+
+    def test_same_period_key_under_two_chores_is_allowed(self):
+        other = Chore.objects.create(
+            name="Mop floors", frequency=Chore.Frequency.WEEKLY
+        )
+        Swap.objects.create(
+            chore=self.chore,
+            period_key="2026-W37",
+            from_member=self.sam,
+            to_member=self.alex,
+        )
+        Swap.objects.create(
+            chore=other,
+            period_key="2026-W37",
+            from_member=self.sam,
+            to_member=self.alex,
+        )
+        self.assertEqual(Swap.objects.filter(period_key="2026-W37").count(), 2)
+
+
+class ResponsibleMemberTest(TestCase):
+    ANCHOR = date(2026, 1, 5)
+
+    def setUp(self):
+        self.chore = Chore.objects.create(
+            name="Vacuum", frequency=Chore.Frequency.WEEKLY
+        )
+        self.sam = Member.objects.create(name="Sam")
+        self.alex = Member.objects.create(name="Alex")
+        self.jo = Member.objects.create(name="Jo")
+        self.kim = Member.objects.create(name="Kim")
+        for position, member in enumerate(
+            [self.sam, self.alex, self.jo, self.kim]
+        ):
+            RotationSlot.objects.create(
+                chore=self.chore, member=member, position=position
+            )
+        # Base rotation for a weekly chore anchored on 2026-01-05:
+        #   P-1 -> Kim, P -> Sam, P+1 -> Alex
+        self.p_minus_1 = self.ANCHOR - timedelta(days=7)
+        self.p = self.ANCHOR
+        self.p_plus_1 = self.ANCHOR + timedelta(days=7)
+
+    def _key(self, ref):
+        return period_key(self.chore.frequency, datetime.combine(ref, time()))
+
+    def test_base_rotation_without_a_swap(self):
+        self.assertEqual(
+            responsible_member(self.chore, self.p_minus_1, self.ANCHOR), self.kim
+        )
+        self.assertEqual(
+            responsible_member(self.chore, self.p, self.ANCHOR), self.sam
+        )
+        self.assertEqual(
+            responsible_member(self.chore, self.p_plus_1, self.ANCHOR), self.alex
+        )
+
+    def test_swap_overrides_only_its_own_period(self):
+        Swap.objects.create(
+            chore=self.chore,
+            period_key=self._key(self.p),
+            from_member=self.sam,
+            to_member=self.jo,
+        )
+        self.assertEqual(
+            responsible_member(self.chore, self.p, self.ANCHOR), self.jo
+        )
+        self.assertEqual(
+            responsible_member(self.chore, self.p_minus_1, self.ANCHOR), self.kim
+        )
+        self.assertEqual(
+            responsible_member(self.chore, self.p_plus_1, self.ANCHOR), self.alex
+        )
+
+    def test_swap_with_stale_from_member_is_ignored(self):
+        Swap.objects.create(
+            chore=self.chore,
+            period_key=self._key(self.p),
+            from_member=self.alex,
+            to_member=self.jo,
+        )
+        self.assertEqual(
+            responsible_member(self.chore, self.p, self.ANCHOR), self.sam
+        )
+
+    def test_empty_rotation_with_a_swap_present_returns_none(self):
+        empty = Chore.objects.create(
+            name="Dust", frequency=Chore.Frequency.WEEKLY
+        )
+        Swap.objects.create(
+            chore=empty,
+            period_key=self._key(self.p),
+            from_member=self.sam,
+            to_member=self.jo,
+        )
+        self.assertIsNone(responsible_member(empty, self.p, self.ANCHOR))
