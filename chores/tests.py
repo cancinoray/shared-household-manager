@@ -704,6 +704,77 @@ class SwapModelTest(TestCase):
         self.assertEqual(Swap.objects.filter(period_key="2026-W37").count(), 2)
 
 
+class ChoreCompleteViewTest(TestCase):
+    def setUp(self):
+        self.alex = Member.objects.create(name="Alex")
+        self.chore = Chore.objects.create(
+            name="Wash dishes", frequency=Chore.Frequency.DAILY
+        )
+        RotationSlot.objects.create(
+            chore=self.chore, member=self.alex, position=0
+        )
+
+    def _url(self, pk):
+        return reverse("chores:chore_complete", args=[pk])
+
+    def test_post_creates_one_completion_and_returns_partial_only(self):
+        response = self.client.post(self._url(self.chore.pk))
+        self.assertEqual(response.status_code, 200)
+        body = response.content.decode()
+        self.assertNotIn("<html", body)
+        self.assertTemplateUsed(response, "chores/partials/_chore_row.html")
+        completions = Completion.objects.filter(chore=self.chore)
+        self.assertEqual(completions.count(), 1)
+        completion = completions.get()
+        self.assertEqual(completion.member, self.alex)
+        # period_key is derived from the row's own completed_at, not the clock.
+        self.assertEqual(
+            completion.period_key,
+            period_key(self.chore.frequency, completion.completed_at),
+        )
+
+    def test_response_fragment_shows_done_state(self):
+        response = self.client.post(self._url(self.chore.pk))
+        self.assertTrue(response.context["done_this_period"])
+        self.assertContains(response, "chore-row--done")
+        self.assertContains(response, "Done")
+
+    def test_second_post_same_period_creates_no_extra_completion(self):
+        self.client.post(self._url(self.chore.pk))
+        response = self.client.post(self._url(self.chore.pk))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            Completion.objects.filter(chore=self.chore).count(), 1
+        )
+        self.assertContains(response, "chore-row--done")
+
+    def test_unknown_pk_returns_404(self):
+        response = self.client.post(self._url(9999))
+        self.assertEqual(response.status_code, 404)
+
+    def test_inactive_chore_returns_404(self):
+        self.chore.is_active = False
+        self.chore.save()
+        response = self.client.post(self._url(self.chore.pk))
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(Completion.objects.count(), 0)
+
+    def test_get_is_not_allowed(self):
+        response = self.client.get(self._url(self.chore.pk))
+        self.assertEqual(response.status_code, 405)
+
+    def test_no_acting_member_returns_error_partial_without_recording(self):
+        self.alex.is_active = False
+        self.alex.save()
+        response = self.client.post(self._url(self.chore.pk))
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(response, "chores/partials/_chore_row.html")
+        self.assertNotIn("<html", response.content.decode())
+        self.assertContains(response, "Couldn")
+        self.assertFalse(response.context["done_this_period"])
+        self.assertEqual(Completion.objects.count(), 0)
+
+
 class ResponsibleMemberTest(TestCase):
     ANCHOR = date(2026, 1, 5)
 

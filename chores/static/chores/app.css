@@ -94,6 +94,20 @@ a {
   border-left-color: var(--color-done);
 }
 
+/* Chore row states (design-system: Chore row) — token-bound, never colour alone.
+   The "done" markup already pairs a check glyph with the word "Done"; the
+   "error" affordance pairs a "!" glyph with a message. Both take their colour
+   from an existing token. */
+.chore-row--done .chore-row__done-btn {
+  color: var(--color-done);
+}
+
+.chore-row__error {
+  display: block;
+  margin-top: var(--space-1);
+  color: var(--color-overdue);
+}
+
 /* Visible focus outline on interactive elements — never removed */
 a:focus-visible,
 button:focus-visible,
