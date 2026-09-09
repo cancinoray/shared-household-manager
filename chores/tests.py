@@ -1,3 +1,4 @@
+from datetime import date, timedelta
 from io import StringIO
 
 from django.core.exceptions import ValidationError
@@ -8,6 +9,7 @@ from django.urls import reverse
 
 from .models import Chore, Member, RotationSlot
 from .presets import PRESET_CHORES
+from .rotation import whose_turn
 
 
 class SmokeTest(TestCase):
@@ -153,3 +155,101 @@ class RotationSlotModelTest(TestCase):
         RotationSlot.objects.create(chore=self.chore, member=self.sam, position=0)
         with self.assertRaises(IntegrityError):
             self.sam.delete()
+
+
+class WhoseTurnTest(TestCase):
+    ANCHOR = date(2026, 1, 5)
+
+    def setUp(self):
+        self.alex = Member.objects.create(name="Alex")
+        self.blair = Member.objects.create(name="Blair")
+        self.casey = Member.objects.create(name="Casey")
+        self.trio = [self.alex, self.blair, self.casey]
+
+    def test_empty_rotation_returns_none(self):
+        self.assertIsNone(
+            whose_turn([], "daily", self.ANCHOR, self.ANCHOR)
+        )
+
+    def test_single_member_rotation_on_day_zero_and_100_days_later(self):
+        self.assertEqual(
+            whose_turn([self.alex], "daily", self.ANCHOR, self.ANCHOR),
+            self.alex,
+        )
+        self.assertEqual(
+            whose_turn(
+                [self.alex],
+                "daily",
+                self.ANCHOR + timedelta(days=100),
+                self.ANCHOR,
+            ),
+            self.alex,
+        )
+
+    def test_reference_date_equals_anchor_returns_first_member(self):
+        self.assertEqual(
+            whose_turn(self.trio, "daily", self.ANCHOR, self.ANCHOR),
+            self.alex,
+        )
+
+    def test_daily_three_member_rotation_over_four_days(self):
+        expected = [self.alex, self.blair, self.casey, self.alex]
+        for offset, member in enumerate(expected):
+            self.assertEqual(
+                whose_turn(
+                    self.trio,
+                    "daily",
+                    self.ANCHOR + timedelta(days=offset),
+                    self.ANCHOR,
+                ),
+                member,
+                msg=f"day {offset}",
+            )
+
+    def test_weekly_holds_for_seven_days_then_advances(self):
+        for offset in range(7):
+            self.assertEqual(
+                whose_turn(
+                    self.trio,
+                    "weekly",
+                    self.ANCHOR + timedelta(days=offset),
+                    self.ANCHOR,
+                ),
+                self.alex,
+                msg=f"day {offset}",
+            )
+        self.assertEqual(
+            whose_turn(
+                self.trio,
+                "weekly",
+                self.ANCHOR + timedelta(days=7),
+                self.ANCHOR,
+            ),
+            self.blair,
+        )
+
+    def test_reference_date_one_day_before_anchor_returns_last_member(self):
+        self.assertEqual(
+            whose_turn(
+                self.trio,
+                "daily",
+                self.ANCHOR - timedelta(days=1),
+                self.ANCHOR,
+            ),
+            self.casey,
+        )
+
+    def test_span_of_several_full_cycles_wraps_correctly(self):
+        self.assertEqual(
+            whose_turn(
+                self.trio,
+                "daily",
+                self.ANCHOR + timedelta(days=7),
+                self.ANCHOR,
+            ),
+            self.blair,
+        )
+
+    def test_unknown_frequency_raises_value_error(self):
+        with self.assertRaises(ValueError):
+            whose_turn(self.trio, "monthly", self.ANCHOR, self.ANCHOR)
