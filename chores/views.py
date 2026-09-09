@@ -1,3 +1,6 @@
-from django.shortcuts import render
+from django.http import HttpResponse
 
-# Create your views here.
+
+def home(request):
+    """Placeholder landing page; replaced by the chore board in a later task."""
+    return HttpResponse("Household Chore Rotation Tool")
