@@ -1,4 +1,7 @@
 from django.db import models
+from django.utils import timezone
+
+from . import periods
 
 
 class Member(models.Model):
@@ -69,3 +72,56 @@ class RotationSlot(models.Model):
 
     def __str__(self):
         return f"{self.chore.name} #{self.position}: {self.member.name}"
+
+
+class CompletionQuerySet(models.QuerySet):
+    def completed_in_current_period(self, chore, reference_dt):
+        """True iff at least one ``Completion`` exists for ``chore`` whose
+        ``period_key`` matches the key for ``reference_dt``.
+        """
+        key = periods.period_key(chore.frequency, reference_dt)
+        return self.filter(chore=chore, period_key=key).exists()
+
+    def recent(self, limit=None):
+        """Completions newest-first. ``limit`` caps the row count when given."""
+        qs = self.order_by("-completed_at")
+        if limit is not None:
+            qs = qs[:limit]
+        return qs
+
+
+class Completion(models.Model):
+    """One record that a chore was marked done, by whom, and when.
+
+    Two completions for the same chore in the same period are allowed -- the
+    log keeps every row. ``period_key`` is derived from ``completed_at`` and
+    ``chore.frequency`` on save unless the caller sets it explicitly.
+    """
+
+    chore = models.ForeignKey(
+        Chore, on_delete=models.CASCADE, related_name="completions"
+    )
+    member = models.ForeignKey(Member, on_delete=models.PROTECT)
+    completed_at = models.DateTimeField(default=timezone.now)
+    period_key = models.CharField(max_length=16)
+
+    objects = CompletionQuerySet.as_manager()
+
+    class Meta:
+        ordering = ["-completed_at"]
+
+    def __str__(self):
+        completed = self.completed_at
+        if timezone.is_aware(completed):
+            completed = timezone.localtime(completed)
+        return (
+            f"{self.chore.name} by {self.member.name} "
+            f"on {completed:%Y-%m-%d}"
+        )
+
+    def save(self, *args, **kwargs):
+        if not self.period_key:
+            self.period_key = periods.period_key(
+                self.chore.frequency, self.completed_at
+            )
+        super().save(*args, **kwargs)
