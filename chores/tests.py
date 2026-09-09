@@ -13,23 +13,102 @@ from .models import Chore, Completion, Member, RotationSlot, Swap
 from .overdue import overdue_status
 from .periods import period_key
 from .presets import PRESET_CHORES
-from .rotation import responsible_member, whose_turn
+from .rotation import ROTATION_ANCHOR, responsible_member, whose_turn
 
 
-class HomeViewTest(TestCase):
-    def test_home_returns_200(self):
+class HomeRedirectTest(TestCase):
+    def test_home_redirects_to_board(self):
         response = self.client.get(reverse("chores:home"))
+        self.assertRedirects(response, reverse("chores:board"))
+
+    def test_home_redirect_is_302(self):
+        response = self.client.get(reverse("chores:home"))
+        self.assertEqual(response.status_code, 302)
+
+
+class BoardViewTest(TestCase):
+    ANCHOR = ROTATION_ANCHOR
+
+    def setUp(self):
+        self.alex = Member.objects.create(name="Alex")
+
+    def _single_member_chore(self, name, frequency, member=None):
+        chore = Chore.objects.create(name=name, frequency=frequency)
+        RotationSlot.objects.create(
+            chore=chore, member=member or self.alex, position=0
+        )
+        return chore
+
+    def test_board_returns_200_and_uses_board_template(self):
+        response = self.client.get(reverse("chores:board"))
         self.assertEqual(response.status_code, 200)
-
-    def test_home_extends_base_template(self):
-        response = self.client.get(reverse("chores:home"))
+        self.assertTemplateUsed(response, "chores/board.html")
         self.assertTemplateUsed(response, "chores/base.html")
-        self.assertTemplateUsed(response, "chores/home.html")
 
     def test_stylesheet_is_referenced_and_collectable(self):
-        response = self.client.get(reverse("chores:home"))
+        response = self.client.get(reverse("chores:board"))
         self.assertContains(response, "chores/app.css")
         self.assertIsNotNone(finders.find("chores/app.css"))
+
+    def test_active_chore_and_responsible_member_name_appear(self):
+        # A single-member rotation makes the responsible member deterministic
+        # for any reference date, so no clock injection is needed here.
+        self._single_member_chore("Vacuum", Chore.Frequency.DAILY)
+        response = self.client.get(reverse("chores:board"))
+        self.assertContains(response, "Vacuum")
+        self.assertContains(response, "Alex")
+
+    def test_inactive_chore_does_not_appear(self):
+        Chore.objects.create(
+            name="Retired chore",
+            frequency=Chore.Frequency.DAILY,
+            is_active=False,
+        )
+        response = self.client.get(reverse("chores:board"))
+        self.assertNotContains(response, "Retired chore")
+
+    def test_daily_and_weekly_chores_render_under_their_groups(self):
+        self._single_member_chore("Sweep kitchen", Chore.Frequency.DAILY)
+        self._single_member_chore("Mow lawn", Chore.Frequency.WEEKLY)
+        response = self.client.get(reverse("chores:board"))
+        body = response.content.decode()
+        self.assertContains(response, "Sweep kitchen")
+        self.assertContains(response, "Mow lawn")
+        daily_heading = body.index(">Daily<")
+        weekly_heading = body.index(">Weekly<")
+        self.assertLess(daily_heading, body.index("Sweep kitchen"))
+        self.assertLess(body.index("Sweep kitchen"), weekly_heading)
+        self.assertLess(weekly_heading, body.index("Mow lawn"))
+
+    def test_chore_with_empty_rotation_shows_no_one_assigned(self):
+        Chore.objects.create(name="Dust shelves", frequency=Chore.Frequency.DAILY)
+        response = self.client.get(reverse("chores:board"))
+        self.assertContains(response, "Dust shelves")
+        self.assertContains(response, "No one assigned")
+
+    def test_no_active_chores_shows_friendly_empty_state(self):
+        response = self.client.get(reverse("chores:board"))
+        self.assertContains(response, "No active chores")
+
+    def test_done_this_period_marks_row_done(self):
+        chore = self._single_member_chore("Wash dishes", Chore.Frequency.DAILY)
+        Completion.objects.create(chore=chore, member=self.alex)
+        response = self.client.get(reverse("chores:board"))
+        self.assertContains(response, "chore-row--done")
+
+    def test_context_row_shape_matches_api_contract(self):
+        self._single_member_chore("Vacuum", Chore.Frequency.DAILY)
+        self._single_member_chore("Mow lawn", Chore.Frequency.WEEKLY)
+        response = self.client.get(reverse("chores:board"))
+        for key in ("daily_chores", "weekly_chores"):
+            rows = response.context[key]
+            self.assertEqual(len(rows), 1)
+            row = rows[0]
+            self.assertEqual(
+                set(row),
+                {"chore", "responsible_member", "done_this_period", "overdue"},
+            )
+            self.assertFalse(row["overdue"])
 
 
 class MemberModelTest(TestCase):

@@ -6,4 +6,5 @@ app_name = "chores"
 
 urlpatterns = [
     path("", views.home, name="home"),
+    path("board/", views.board, name="board"),
 ]

@@ -13,10 +13,21 @@ and applies a one-off :class:`chores.models.Swap` override for that period.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 
 DAILY = "daily"
 WEEKLY = "weekly"
+
+# The single global period-0 anchor for every chore rotation.
+#
+# ``responsible_member(chore, today, ROTATION_ANCHOR)`` treats this date as
+# period index 0: a daily rotation advances one seat per calendar day from
+# here, a weekly rotation advances every 7 days and takes its week alignment
+# from this date's weekday (2026-01-05 is a Monday, so weekly chores roll
+# over on Mondays). Per-chore anchors are #23; until then the board (#10)
+# passes this constant for every chore. It also matches the fixed anchor the
+# rotation test suite already uses.
+ROTATION_ANCHOR = date(2026, 1, 5)
 
 
 def whose_turn(rotation, frequency, reference_date, anchor_date):

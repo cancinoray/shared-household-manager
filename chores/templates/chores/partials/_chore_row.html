@@ -1,0 +1,25 @@
+{% comment %}
+One chore-row component (design-system: Chore row). Renders exactly one
+<li> and nothing else — no {% extends %}. Reused by #11, #12, #13, #15.
+
+Context: chore, responsible_member, done_this_period (bool), overdue
+(falsy for now; #13 gives it a real value / styling).
+{% endcomment %}
+<li class="chore-row{% if done_this_period %} chore-row--done{% endif %}{% if overdue %} chore-row--overdue{% endif %}">
+  <div class="chore-row__info">
+    <span class="chore-row__name">{{ chore.name }}</span>
+    <span class="chore-row__member">
+      {% if responsible_member %}{{ responsible_member.name }}{% else %}No one assigned{% endif %}
+    </span>
+  </div>
+  {# Inert until #11 wires the complete endpoint; keeps it a real button in a form, not a checkbox. #}
+  <form class="chore-row__done" method="post">
+    <button type="submit" class="chore-row__done-btn" disabled aria-disabled="true">
+      {% if done_this_period %}
+        <span aria-hidden="true">&check;</span> Done
+      {% else %}
+        Mark done
+      {% endif %}
+    </button>
+  </form>
+</li>

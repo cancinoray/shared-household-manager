@@ -1,0 +1,37 @@
+{% extends "chores/base.html" %}
+
+{% block title %}Chore board{% endblock %}
+
+{% block content %}
+<section class="board" aria-label="Chore board">
+  {% if not has_active_chores %}
+  <p class="board__empty">No active chores yet. Add some and they'll show up here.</p>
+  {% else %}
+  <section class="board__group" aria-labelledby="board-heading-daily">
+    <h2 class="board__heading" id="board-heading-daily">Daily</h2>
+    {% if daily_chores %}
+    <ul class="chore-list">
+      {% for row in daily_chores %}
+        {% include "chores/partials/_chore_row.html" with chore=row.chore responsible_member=row.responsible_member done_this_period=row.done_this_period overdue=row.overdue %}
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="board__empty">No daily chores.</p>
+    {% endif %}
+  </section>
+
+  <section class="board__group" aria-labelledby="board-heading-weekly">
+    <h2 class="board__heading" id="board-heading-weekly">Weekly</h2>
+    {% if weekly_chores %}
+    <ul class="chore-list">
+      {% for row in weekly_chores %}
+        {% include "chores/partials/_chore_row.html" with chore=row.chore responsible_member=row.responsible_member done_this_period=row.done_this_period overdue=row.overdue %}
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="board__empty">No weekly chores.</p>
+    {% endif %}
+  </section>
+  {% endif %}
+</section>
+{% endblock %}
