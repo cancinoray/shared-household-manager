@@ -1,0 +1,32 @@
+{% load static %}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Shared Household Manager{% endblock %}</title>
+  <link rel="stylesheet" href="{% static 'chores/app.css' %}">
+  <script src="https://unpkg.com/htmx.org@2.0.3" defer></script>
+  {% block extra_css %}{% endblock %}
+</head>
+<body>
+  <header class="app-header">
+    <p class="app-name">Shared Household Manager</p>
+    {% block header %}{% endblock %}
+  </header>
+
+  {% if messages %}
+  <section class="messages" aria-label="Notifications">
+    <ul>
+      {% for message in messages %}
+      <li class="message{% if message.tags %} message--{{ message.tags }}{% endif %}">{{ message }}</li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+
+  <main class="app-main">
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

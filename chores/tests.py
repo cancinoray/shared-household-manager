@@ -2,6 +2,7 @@ from datetime import date, datetime, time, timedelta, timezone as dt_timezone
 from io import StringIO
 
 from django.core.exceptions import ValidationError
+from django.contrib.staticfiles import finders
 from django.core.management import call_command
 from django.db import IntegrityError
 from django.db.models.deletion import ProtectedError
@@ -15,10 +16,20 @@ from .presets import PRESET_CHORES
 from .rotation import responsible_member, whose_turn
 
 
-class SmokeTest(TestCase):
+class HomeViewTest(TestCase):
     def test_home_returns_200(self):
-        response = self.client.get(reverse("home"))
+        response = self.client.get(reverse("chores:home"))
         self.assertEqual(response.status_code, 200)
+
+    def test_home_extends_base_template(self):
+        response = self.client.get(reverse("chores:home"))
+        self.assertTemplateUsed(response, "chores/base.html")
+        self.assertTemplateUsed(response, "chores/home.html")
+
+    def test_stylesheet_is_referenced_and_collectable(self):
+        response = self.client.get(reverse("chores:home"))
+        self.assertContains(response, "chores/app.css")
+        self.assertIsNotNone(finders.find("chores/app.css"))
 
 
 class MemberModelTest(TestCase):
