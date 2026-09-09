@@ -4,34 +4,32 @@
 
 {% block content %}
 <section class="board" aria-label="Chore board">
-  {% if not has_active_chores %}
-  <p class="board__empty">No active chores yet. Add some and they'll show up here.</p>
-  {% else %}
-  <section class="board__group" aria-labelledby="board-heading-daily">
-    <h2 class="board__heading" id="board-heading-daily">Daily</h2>
-    {% if daily_chores %}
-    <ul class="chore-list">
-      {% for row in daily_chores %}
-        {% include "chores/partials/_chore_row.html" with chore=row.chore responsible_member=row.responsible_member done_this_period=row.done_this_period overdue=row.overdue %}
-      {% endfor %}
-    </ul>
-    {% else %}
-    <p class="board__empty">No daily chores.</p>
-    {% endif %}
-  </section>
+  {% comment %}
+  Poll container. It re-fetches `chores:board_list` every 10s
+  (`hx-trigger="every 10s"`, the interval pinned by `_docs/design-system.md`)
+  and swaps the result into its own contents (`hx-swap="innerHTML"`). It
+  {% include %}s the exact same `_board_list.html` the endpoint returns, so the
+  first paint and every polled refresh are byte-identical.
 
-  <section class="board__group" aria-labelledby="board-heading-weekly">
-    <h2 class="board__heading" id="board-heading-weekly">Weekly</h2>
-    {% if weekly_chores %}
-    <ul class="chore-list">
-      {% for row in weekly_chores %}
-        {% include "chores/partials/_chore_row.html" with chore=row.chore responsible_member=row.responsible_member done_this_period=row.done_this_period overdue=row.overdue %}
-      {% endfor %}
-    </ul>
-    {% else %}
-    <p class="board__empty">No weekly chores.</p>
-    {% endif %}
-  </section>
-  {% endif %}
+  Poll safety — `hx-sync="closest .board__poll:queue last"`:
+  htmx inherits `hx-sync` down to the mark-done form / button in `_chore_row.html`
+  (#11) and the swap form (#15, when present). `closest .board__poll` resolves to
+  THIS container from the poll itself and from every inner form, so the poll and
+  all in-list user actions share one request queue. `queue last` means a request
+  that arrives while another is in flight is queued, never dropped and never
+  aborted: a user-initiated mark-done / swap POST that starts mid-poll is queued
+  and then runs; a poll that fires while a user POST is in flight is queued and
+  runs after, by which point the POST has already swapped its own row, so the
+  refresh has nothing to clobber. (`abort` was rejected: it has a race window
+  where a user POST is dropped if a poll happens to be in flight when the user
+  taps — the AC forbids that.)
+  {% endcomment %}
+  <div class="board__poll"
+       hx-get="{% url 'chores:board_list' %}"
+       hx-trigger="every 10s"
+       hx-swap="innerHTML"
+       hx-sync="closest .board__poll:queue last">
+    {% include "chores/partials/_board_list.html" %}
+  </div>
 </section>
 {% endblock %}

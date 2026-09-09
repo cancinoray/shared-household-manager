@@ -1,3 +1,4 @@
+import re
 from datetime import date, datetime, time, timedelta, timezone as dt_timezone
 from io import StringIO
 
@@ -14,6 +15,7 @@ from .overdue import overdue_status
 from .periods import period_key
 from .presets import PRESET_CHORES
 from .rotation import ROTATION_ANCHOR, responsible_member, whose_turn
+from .views import build_board_context
 
 
 class HomeRedirectTest(TestCase):
@@ -851,3 +853,118 @@ class ResponsibleMemberTest(TestCase):
             to_member=self.jo,
         )
         self.assertIsNone(responsible_member(empty, self.p, self.ANCHOR))
+
+
+class BuildBoardContextTest(TestCase):
+    """The one shared builder feeding both `board` and `board_list`."""
+
+    def setUp(self):
+        self.alex = Member.objects.create(name="Alex")
+
+    def _single_member_chore(self, name, frequency):
+        chore = Chore.objects.create(name=name, frequency=frequency)
+        RotationSlot.objects.create(chore=chore, member=self.alex, position=0)
+        return chore
+
+    def test_returns_the_api_contract_keys(self):
+        context = build_board_context(now=datetime(2026, 1, 5, 9, 0))
+        self.assertEqual(
+            set(context),
+            {
+                "daily_chores",
+                "weekly_chores",
+                "overdue_count",
+                "has_active_chores",
+            },
+        )
+
+    def test_overdue_count_is_zero_until_issue_13(self):
+        self._single_member_chore("Vacuum", Chore.Frequency.DAILY)
+        context = build_board_context(now=datetime(2026, 1, 5, 9, 0))
+        self.assertEqual(context["overdue_count"], 0)
+
+    def test_groups_active_chores_by_frequency_with_injected_date(self):
+        self._single_member_chore("Sweep", Chore.Frequency.DAILY)
+        self._single_member_chore("Mow lawn", Chore.Frequency.WEEKLY)
+        context = build_board_context(now=datetime(2026, 1, 5, 9, 0))
+        self.assertEqual(
+            [row["chore"].name for row in context["daily_chores"]], ["Sweep"]
+        )
+        self.assertEqual(
+            [row["chore"].name for row in context["weekly_chores"]], ["Mow lawn"]
+        )
+        self.assertTrue(context["has_active_chores"])
+
+    def test_has_active_chores_false_when_none_active(self):
+        context = build_board_context(now=datetime(2026, 1, 5, 9, 0))
+        self.assertFalse(context["has_active_chores"])
+
+
+class BoardListEndpointTest(TestCase):
+    """`GET /board/list/` — the polled `_board_list` fragment."""
+
+    def setUp(self):
+        self.alex = Member.objects.create(name="Alex")
+
+    def _single_member_chore(self, name, frequency):
+        chore = Chore.objects.create(name=name, frequency=frequency)
+        RotationSlot.objects.create(chore=chore, member=self.alex, position=0)
+        return chore
+
+    def test_returns_200_and_partial_template_without_html_wrapper(self):
+        response = self.client.get(reverse("chores:board_list"))
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(
+            response, "chores/partials/_board_list.html"
+        )
+        body = response.content.decode()
+        self.assertNotIn("<html", body)
+        self.assertTemplateNotUsed(response, "chores/base.html")
+
+    def test_context_matches_api_contract(self):
+        response = self.client.get(reverse("chores:board_list"))
+        self.assertEqual(response.context["overdue_count"], 0)
+        for key in ("daily_chores", "weekly_chores"):
+            self.assertIn(key, response.context)
+
+    def test_partial_lists_active_chore_name_and_responsible_member(self):
+        self._single_member_chore("Vacuum", Chore.Frequency.DAILY)
+        response = self.client.get(reverse("chores:board_list"))
+        self.assertContains(response, "Vacuum")
+        self.assertContains(response, "Alex")
+
+    def test_partial_does_not_render_the_overdue_banner(self):
+        # The banner is #13 / OOB-only; the poll must never render it.
+        self._single_member_chore("Vacuum", Chore.Frequency.DAILY)
+        response = self.client.get(reverse("chores:board_list"))
+        self.assertNotContains(response, "overdue-banner")
+
+    def test_empty_state_when_no_active_chores(self):
+        response = self.client.get(reverse("chores:board_list"))
+        self.assertContains(response, "No active chores")
+
+
+class BoardPollWiringTest(TestCase):
+    """The full board page wires the poll container to `chores:board_list`."""
+
+    def test_board_includes_the_shared_board_list_partial(self):
+        response = self.client.get(reverse("chores:board"))
+        self.assertTemplateUsed(
+            response, "chores/partials/_board_list.html"
+        )
+
+    def test_board_has_container_polling_board_list_every_10s(self):
+        response = self.client.get(reverse("chores:board"))
+        body = response.content.decode()
+        list_url = reverse("chores:board_list")
+        # hx-get and hx-trigger="every 10s" live on the same element.
+        container = re.search(r"<div\b[^>]*\bhx-trigger=\"every 10s\"[^>]*>", body)
+        self.assertIsNotNone(container)
+        self.assertIn(f'hx-get="{list_url}"', container.group(0))
+
+    def test_poll_container_scopes_requests_so_user_posts_are_not_dropped(self):
+        response = self.client.get(reverse("chores:board"))
+        body = response.content.decode()
+        container = re.search(r"<div\b[^>]*\bhx-trigger=\"every 10s\"[^>]*>", body)
+        self.assertIsNotNone(container)
+        self.assertIn("hx-sync=", container.group(0))

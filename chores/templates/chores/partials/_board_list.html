@@ -1,0 +1,43 @@
+{% comment %}
+The board chore list, and nothing else (design-system: partial — leading
+underscore, no {% extends %}, no <html> wrapper).
+
+Rendered by `chores:board_list` for the 10s poll AND {% include %}-d by
+board.html, so the page and the polled fragment cannot drift.
+
+NOT rendered here: the overdue banner. Per `_docs/design-system.md` the banner
+updates via an out-of-band swap from the complete / swap responses (#13), never
+from this poll, so `overdue_count` is present in context but unused for now.
+
+Context: daily_chores, weekly_chores (iterables of `_chore_row` context),
+overdue_count (0 until #13), has_active_chores.
+{% endcomment %}
+{% if not has_active_chores %}
+<p class="board__empty">No active chores yet. Add some and they'll show up here.</p>
+{% else %}
+<section class="board__group" aria-labelledby="board-heading-daily">
+  <h2 class="board__heading" id="board-heading-daily">Daily</h2>
+  {% if daily_chores %}
+  <ul class="chore-list">
+    {% for row in daily_chores %}
+      {% include "chores/partials/_chore_row.html" with chore=row.chore responsible_member=row.responsible_member done_this_period=row.done_this_period overdue=row.overdue %}
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="board__empty">No daily chores.</p>
+  {% endif %}
+</section>
+
+<section class="board__group" aria-labelledby="board-heading-weekly">
+  <h2 class="board__heading" id="board-heading-weekly">Weekly</h2>
+  {% if weekly_chores %}
+  <ul class="chore-list">
+    {% for row in weekly_chores %}
+      {% include "chores/partials/_chore_row.html" with chore=row.chore responsible_member=row.responsible_member done_this_period=row.done_this_period overdue=row.overdue %}
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="board__empty">No weekly chores.</p>
+  {% endif %}
+</section>
+{% endif %}

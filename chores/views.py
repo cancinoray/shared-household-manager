@@ -26,9 +26,20 @@ def _row_context(chore, today, now):
     }
 
 
-def board(request):
-    """Full board page: active chores grouped daily / weekly, ordered by name."""
-    now = timezone.localtime()
+def build_board_context(now=None):
+    """Shared board context for `chores:board` and `chores:board_list`.
+
+    #10 inlined this as a nested `rows_for` closure inside `board()`; it is
+    hoisted here so the full page and the polled `_board_list` fragment build
+    their daily / weekly grouping from one place and cannot drift.
+
+    Returns `daily_chores`, `weekly_chores` (iterables of `_chore_row` context
+    per `_docs/api.md`), `overdue_count` (always `0` until #13), and
+    `has_active_chores` (drives `board.html`'s empty state).
+
+    `now` may be injected for tests; it defaults to the current local time.
+    """
+    now = now or timezone.localtime()
     today = now.date()
 
     def rows_for(frequency):
@@ -40,12 +51,34 @@ def board(request):
     daily_chores = rows_for(Chore.Frequency.DAILY)
     weekly_chores = rows_for(Chore.Frequency.WEEKLY)
 
-    context = {
+    return {
         "daily_chores": daily_chores,
         "weekly_chores": weekly_chores,
+        "overdue_count": 0,
         "has_active_chores": bool(daily_chores or weekly_chores),
     }
-    return render(request, "chores/board.html", context)
+
+
+def board(request):
+    """Full board page: active chores grouped daily / weekly, ordered by name."""
+    return render(request, "chores/board.html", build_board_context())
+
+
+def board_list(request):
+    """Polled fragment: the daily / weekly chore list only.
+
+    `GET /board/list/` (`chores:board_list`), refreshed every 10s by the board
+    page. Returns the `_board_list` partial (no `<html>` wrapper), status 200,
+    built from the same `build_board_context` the full page uses. GET only, no
+    CSRF. The overdue banner is deliberately not rendered here — per
+    `_docs/design-system.md` it updates via an out-of-band swap from the
+    complete / swap responses, not from this poll.
+    """
+    return render(
+        request,
+        "chores/partials/_board_list.html",
+        build_board_context(),
+    )
 
 
 def _acting_member(request):
