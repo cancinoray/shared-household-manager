@@ -9,6 +9,7 @@ from django.test import TestCase
 from django.urls import reverse
 
 from .models import Chore, Completion, Member, RotationSlot, Swap
+from .overdue import overdue_status
 from .periods import period_key
 from .presets import PRESET_CHORES
 from .rotation import responsible_member, whose_turn
@@ -396,6 +397,142 @@ class CompletionQueryHelpersTest(TestCase):
         self.assertTrue(
             Completion.objects.completed_in_current_period(self.daily, reference)
         )
+
+
+class OverdueStatusTest(TestCase):
+    def _at(self, *args):
+        return datetime(*args, tzinfo=dt_timezone.utc)
+
+    # --- Daily ---------------------------------------------------------------
+
+    def test_daily_never_completed_is_overdue_missed_one(self):
+        status = overdue_status(
+            "daily", None, self._at(2026, 9, 10, 12, 0)
+        )
+        self.assertTrue(status.is_overdue)
+        self.assertEqual(status.missed_periods, 1)
+
+    def test_daily_completed_today_is_not_overdue(self):
+        status = overdue_status(
+            "daily",
+            self._at(2026, 9, 10, 7, 0),
+            self._at(2026, 9, 10, 22, 0),
+        )
+        self.assertFalse(status.is_overdue)
+        self.assertEqual(status.missed_periods, 0)
+
+    def test_daily_completed_yesterday_reference_midnight_default_cutoff(self):
+        status = overdue_status(
+            "daily",
+            self._at(2026, 9, 9, 15, 0),
+            self._at(2026, 9, 10, 0, 0),
+        )
+        self.assertTrue(status.is_overdue)
+        self.assertEqual(status.missed_periods, 1)
+
+    def test_daily_completed_yesterday_just_before_non_midnight_cutoff(self):
+        status = overdue_status(
+            "daily",
+            self._at(2026, 9, 9, 20, 0),
+            self._at(2026, 9, 10, 8, 59),
+            daily_cutoff=time(9, 0),
+        )
+        self.assertFalse(status.is_overdue)
+        self.assertEqual(status.missed_periods, 0)
+
+    def test_daily_completed_yesterday_just_after_non_midnight_cutoff(self):
+        status = overdue_status(
+            "daily",
+            self._at(2026, 9, 9, 20, 0),
+            self._at(2026, 9, 10, 9, 1),
+            daily_cutoff=time(9, 0),
+        )
+        self.assertTrue(status.is_overdue)
+        self.assertEqual(status.missed_periods, 1)
+
+    def test_daily_completed_three_days_ago_missed_three(self):
+        status = overdue_status(
+            "daily",
+            self._at(2026, 9, 7, 10, 0),
+            self._at(2026, 9, 10, 10, 0),
+        )
+        self.assertTrue(status.is_overdue)
+        self.assertEqual(status.missed_periods, 3)
+
+    def test_daily_completed_three_days_ago_before_cutoff_missed_two(self):
+        status = overdue_status(
+            "daily",
+            self._at(2026, 9, 7, 10, 0),
+            self._at(2026, 9, 10, 6, 0),
+            daily_cutoff=time(9, 0),
+        )
+        self.assertTrue(status.is_overdue)
+        self.assertEqual(status.missed_periods, 2)
+
+    # --- Weekly --------------------------------------------------------------
+
+    def test_weekly_completed_this_week_is_not_overdue(self):
+        status = overdue_status(
+            "weekly",
+            self._at(2026, 9, 7, 9, 0),
+            self._at(2026, 9, 10, 9, 0),
+        )
+        self.assertFalse(status.is_overdue)
+        self.assertEqual(status.missed_periods, 0)
+
+    def test_weekly_completed_last_week_is_overdue_missed_one(self):
+        status = overdue_status(
+            "weekly",
+            self._at(2026, 9, 3, 9, 0),
+            self._at(2026, 9, 10, 9, 0),
+        )
+        self.assertTrue(status.is_overdue)
+        self.assertEqual(status.missed_periods, 1)
+
+    def test_weekly_seven_days_earlier_across_iso_week_boundary_missed_one(self):
+        # 2026-01-04 is a Sunday (ISO 2026-W01); 2026-01-11 is the next Sunday
+        # (ISO 2026-W02). Exactly 7 days apart, straddling Sun -> Mon.
+        status = overdue_status(
+            "weekly",
+            self._at(2026, 1, 4, 12, 0),
+            self._at(2026, 1, 11, 12, 0),
+        )
+        self.assertTrue(status.is_overdue)
+        self.assertEqual(status.missed_periods, 1)
+
+    def test_weekly_completed_two_weeks_ago_missed_two(self):
+        status = overdue_status(
+            "weekly",
+            self._at(2026, 8, 27, 9, 0),
+            self._at(2026, 9, 10, 9, 0),
+        )
+        self.assertTrue(status.is_overdue)
+        self.assertEqual(status.missed_periods, 2)
+
+    def test_weekly_never_completed_is_overdue_missed_one(self):
+        status = overdue_status(
+            "weekly", None, self._at(2026, 9, 10, 9, 0)
+        )
+        self.assertTrue(status.is_overdue)
+        self.assertEqual(status.missed_periods, 1)
+
+    def test_weekly_ignores_daily_cutoff(self):
+        status = overdue_status(
+            "weekly",
+            self._at(2026, 9, 7, 9, 0),
+            self._at(2026, 9, 10, 3, 0),
+            daily_cutoff=time(23, 0),
+        )
+        self.assertFalse(status.is_overdue)
+        self.assertEqual(status.missed_periods, 0)
+
+    # --- Other -------------------------------------------------------------
+
+    def test_unknown_frequency_raises_value_error(self):
+        with self.assertRaises(ValueError):
+            overdue_status(
+                "monthly", None, self._at(2026, 9, 10, 9, 0)
+            )
 
 
 class SwapModelTest(TestCase):
