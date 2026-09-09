@@ -6,7 +6,7 @@ from django.db import IntegrityError
 from django.test import TestCase
 from django.urls import reverse
 
-from .models import Chore, Member
+from .models import Chore, Member, RotationSlot
 from .presets import PRESET_CHORES
 
 
@@ -93,3 +93,63 @@ class LoadPresetsCommandTest(TestCase):
         self.assertEqual(chore.notes, "hand wash only")
         self.assertFalse(chore.is_active)
         self.assertEqual(Chore.objects.count(), 8)
+
+
+class RotationSlotModelTest(TestCase):
+    def setUp(self):
+        self.chore = Chore.objects.create(
+            name="Vacuum", frequency=Chore.Frequency.WEEKLY
+        )
+        self.sam = Member.objects.create(name="Sam")
+        self.alex = Member.objects.create(name="Alex")
+        self.jo = Member.objects.create(name="Jo")
+
+    def test_str_is_readable(self):
+        slot = RotationSlot.objects.create(chore=self.chore, member=self.sam, position=0)
+        self.assertEqual(str(slot), "Vacuum #0: Sam")
+
+    def test_rotation_members_reads_back_in_position_order(self):
+        RotationSlot.objects.create(chore=self.chore, member=self.jo, position=2)
+        RotationSlot.objects.create(chore=self.chore, member=self.sam, position=0)
+        RotationSlot.objects.create(chore=self.chore, member=self.alex, position=1)
+        self.assertEqual(
+            self.chore.rotation_members(), [self.sam, self.alex, self.jo]
+        )
+
+    def test_rotation_order_is_by_position_not_contiguity(self):
+        RotationSlot.objects.create(chore=self.chore, member=self.jo, position=5)
+        RotationSlot.objects.create(chore=self.chore, member=self.sam, position=0)
+        RotationSlot.objects.create(chore=self.chore, member=self.alex, position=3)
+        self.assertEqual(
+            self.chore.rotation_members(), [self.sam, self.alex, self.jo]
+        )
+
+    def test_duplicate_position_within_chore_raises_integrity_error(self):
+        RotationSlot.objects.create(chore=self.chore, member=self.sam, position=0)
+        with self.assertRaises(IntegrityError):
+            RotationSlot.objects.create(chore=self.chore, member=self.alex, position=0)
+
+    def test_same_member_twice_in_one_chore_raises_integrity_error(self):
+        RotationSlot.objects.create(chore=self.chore, member=self.sam, position=0)
+        with self.assertRaises(IntegrityError):
+            RotationSlot.objects.create(chore=self.chore, member=self.sam, position=1)
+
+    def test_same_position_under_two_chores_is_allowed(self):
+        other = Chore.objects.create(name="Mop floors", frequency=Chore.Frequency.WEEKLY)
+        RotationSlot.objects.create(chore=self.chore, member=self.sam, position=0)
+        RotationSlot.objects.create(chore=other, member=self.alex, position=0)
+        self.assertEqual(RotationSlot.objects.filter(position=0).count(), 2)
+
+    def test_same_member_in_two_chores_is_allowed(self):
+        other = Chore.objects.create(name="Mop floors", frequency=Chore.Frequency.WEEKLY)
+        RotationSlot.objects.create(chore=self.chore, member=self.sam, position=0)
+        RotationSlot.objects.create(chore=other, member=self.sam, position=0)
+        self.assertEqual(RotationSlot.objects.filter(member=self.sam).count(), 2)
+
+    def test_rotation_members_on_empty_rotation_returns_empty_list(self):
+        self.assertEqual(self.chore.rotation_members(), [])
+
+    def test_member_in_rotation_cannot_be_hard_deleted(self):
+        RotationSlot.objects.create(chore=self.chore, member=self.sam, position=0)
+        with self.assertRaises(IntegrityError):
+            self.sam.delete()

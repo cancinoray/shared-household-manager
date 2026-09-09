@@ -1,6 +1,13 @@
 from django.contrib import admin
 
-from .models import Chore, Member
+from .models import Chore, Member, RotationSlot
+
+
+class RotationSlotInline(admin.TabularInline):
+    model = RotationSlot
+    fields = ("member", "position")
+    ordering = ("position",)
+    extra = 1
 
 
 @admin.register(Member)
@@ -15,3 +22,4 @@ class ChoreAdmin(admin.ModelAdmin):
     list_display = ("name", "frequency", "is_active")
     list_filter = ("frequency", "is_active")
     search_fields = ("name",)
+    inlines = [RotationSlotInline]
