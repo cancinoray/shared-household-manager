@@ -1,13 +1,15 @@
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone as dt_timezone
 from io import StringIO
 
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.db import IntegrityError
+from django.db.models.deletion import ProtectedError
 from django.test import TestCase
 from django.urls import reverse
 
-from .models import Chore, Member, RotationSlot
+from .models import Chore, Completion, Member, RotationSlot
+from .periods import period_key
 from .presets import PRESET_CHORES
 from .rotation import whose_turn
 
@@ -253,3 +255,144 @@ class WhoseTurnTest(TestCase):
     def test_unknown_frequency_raises_value_error(self):
         with self.assertRaises(ValueError):
             whose_turn(self.trio, "monthly", self.ANCHOR, self.ANCHOR)
+
+
+class PeriodKeyTest(TestCase):
+    def test_daily_key_is_local_date(self):
+        dt = datetime(2026, 9, 10, 14, 30, tzinfo=dt_timezone.utc)
+        self.assertEqual(period_key("daily", dt), "2026-09-10")
+
+    def test_weekly_key_is_iso_year_week(self):
+        dt = datetime(2026, 9, 10, 14, 30, tzinfo=dt_timezone.utc)
+        self.assertEqual(period_key("weekly", dt), "2026-W37")
+
+    def test_weekly_key_zero_pads_week_number(self):
+        dt = datetime(2026, 1, 5, 9, 0, tzinfo=dt_timezone.utc)
+        self.assertEqual(period_key("weekly", dt), "2026-W02")
+
+    def test_unknown_frequency_raises_value_error(self):
+        dt = datetime(2026, 9, 10, tzinfo=dt_timezone.utc)
+        with self.assertRaises(ValueError):
+            period_key("monthly", dt)
+
+
+class CompletionModelTest(TestCase):
+    def setUp(self):
+        self.daily = Chore.objects.create(
+            name="Vacuum", frequency=Chore.Frequency.DAILY
+        )
+        self.weekly = Chore.objects.create(
+            name="Mow lawn", frequency=Chore.Frequency.WEEKLY
+        )
+        self.sam = Member.objects.create(name="Sam")
+
+    def _at(self, *args):
+        return datetime(*args, tzinfo=dt_timezone.utc)
+
+    def test_str_is_readable(self):
+        completion = Completion.objects.create(
+            chore=self.daily,
+            member=self.sam,
+            completed_at=self._at(2026, 9, 10, 8, 0),
+        )
+        self.assertEqual(str(completion), "Vacuum by Sam on 2026-09-10")
+
+    def test_save_sets_daily_period_key_as_date(self):
+        completion = Completion.objects.create(
+            chore=self.daily,
+            member=self.sam,
+            completed_at=self._at(2026, 9, 10, 8, 0),
+        )
+        self.assertEqual(completion.period_key, "2026-09-10")
+
+    def test_save_sets_weekly_period_key_as_iso_week(self):
+        completion = Completion.objects.create(
+            chore=self.weekly,
+            member=self.sam,
+            completed_at=self._at(2026, 9, 10, 8, 0),
+        )
+        self.assertEqual(completion.period_key, "2026-W37")
+
+    def test_explicit_period_key_is_not_overwritten(self):
+        completion = Completion.objects.create(
+            chore=self.daily,
+            member=self.sam,
+            completed_at=self._at(2026, 9, 10, 8, 0),
+            period_key="custom-key",
+        )
+        self.assertEqual(completion.period_key, "custom-key")
+
+    def test_deleting_member_with_completion_is_protected(self):
+        Completion.objects.create(
+            chore=self.daily,
+            member=self.sam,
+            completed_at=self._at(2026, 9, 10, 8, 0),
+        )
+        with self.assertRaises(ProtectedError):
+            self.sam.delete()
+
+    def test_deleting_chore_cascades_to_completions(self):
+        Completion.objects.create(
+            chore=self.daily,
+            member=self.sam,
+            completed_at=self._at(2026, 9, 10, 8, 0),
+        )
+        self.daily.delete()
+        self.assertEqual(Completion.objects.count(), 0)
+
+
+class CompletionQueryHelpersTest(TestCase):
+    def setUp(self):
+        self.daily = Chore.objects.create(
+            name="Vacuum", frequency=Chore.Frequency.DAILY
+        )
+        self.other = Chore.objects.create(
+            name="Dishes", frequency=Chore.Frequency.DAILY
+        )
+        self.sam = Member.objects.create(name="Sam")
+
+    def _make(self, chore, *args):
+        return Completion.objects.create(
+            chore=chore,
+            member=self.sam,
+            completed_at=datetime(*args, tzinfo=dt_timezone.utc),
+        )
+
+    def test_recent_returns_completions_newest_first(self):
+        first = self._make(self.daily, 2026, 9, 8, 8, 0)
+        second = self._make(self.daily, 2026, 9, 9, 8, 0)
+        third = self._make(self.daily, 2026, 9, 10, 8, 0)
+        self.assertEqual(
+            list(Completion.objects.recent()), [third, second, first]
+        )
+
+    def test_recent_limit_caps_the_count(self):
+        self._make(self.daily, 2026, 9, 8, 8, 0)
+        self._make(self.daily, 2026, 9, 9, 8, 0)
+        self._make(self.daily, 2026, 9, 10, 8, 0)
+        self.assertEqual(Completion.objects.recent(limit=2).count(), 2)
+
+    def test_completed_in_current_period_true_for_reference_period(self):
+        self._make(self.daily, 2026, 9, 10, 8, 0)
+        reference = datetime(2026, 9, 10, 21, 0, tzinfo=dt_timezone.utc)
+        self.assertTrue(
+            Completion.objects.completed_in_current_period(self.daily, reference)
+        )
+
+    def test_completed_in_current_period_false_for_different_period(self):
+        self._make(self.daily, 2026, 9, 10, 8, 0)
+        reference = datetime(2026, 9, 11, 8, 0, tzinfo=dt_timezone.utc)
+        self.assertFalse(
+            Completion.objects.completed_in_current_period(self.daily, reference)
+        )
+
+    def test_two_completions_same_period_are_both_kept_and_still_current(self):
+        self._make(self.daily, 2026, 9, 10, 8, 0)
+        self._make(self.daily, 2026, 9, 10, 20, 0)
+        reference = datetime(2026, 9, 10, 22, 0, tzinfo=dt_timezone.utc)
+        self.assertEqual(
+            Completion.objects.filter(chore=self.daily).count(), 2
+        )
+        self.assertTrue(
+            Completion.objects.completed_in_current_period(self.daily, reference)
+        )
