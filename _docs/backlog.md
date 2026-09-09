@@ -2,11 +2,41 @@
 
 Tasks are sized for a single session. Each is written to be picked up on its own:
 it states the context it needs so you don't have to read the other tasks first.
-Rough build order is top to bottom, but most tasks only need the data models
-(task 2) to exist.
+Build order is roughly top to bottom.
 
 Stack: Django 5.1 + HTMX + server-rendered templates, SQLite, Django admin for
 setup. See `_docs/plan.md` for product scope.
+
+## Dependencies
+
+Tasks 1, 2, and 9 need nothing and can start in parallel. Task 2 (models) is the
+root of the data layer; task 9 (base template) is the root of the UI layer. There
+are no cycles.
+
+| Task | Depends on | Notes |
+|------|------------|-------|
+| 1. Project + test | — | Fully independent |
+| 2. Member/Chore models | — | Root of the data layer |
+| 3. Preset seed data | 2 | |
+| 4. Rotation model | 2 | |
+| 5. "Whose turn" calc | 2, 4 | Needs the rotation ordering |
+| 6. Completion + history | 2 | |
+| 7. Manual swap | 5 (→ 2, 4) | Wraps the task-5 calc |
+| 8. Overdue detection | 2, 6 | Takes "most recent completion" from task 6 |
+| 9. Base template | — | Root of the UI layer |
+| 10. Chore board view | 5, 6, 9 | First screen tying data + UI |
+| 11. Mark-done (HTMX) | 10, 6 | Re-renders the board row partial |
+| 12. Board polling | 10 | |
+| 13. Overdue nudge on board | 8, 10 | |
+| 14. History log view | 6, 9 | |
+| 15. Swap UI | 7, 10 | |
+| 16. Onboarding screen | 2, 3, 9 | |
+| 17. Current-member picker | 2, 9 | Soft: integrates with 11 & 15 |
+| 18. Login gate | 9 (soft) | Otherwise standalone |
+| 19. Deployment config | — | No code dep; best done last |
+
+Critical path: 2 → 4 → 5 → 7 → 10 → 15. Tasks 7, 11, 12, 13, and 15 all assume
+the task-10 board and its row partial exist, so factor that partial cleanly.
 
 ---
 
