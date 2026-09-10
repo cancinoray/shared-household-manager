@@ -5,6 +5,12 @@ One chore-row component (design-system: Chore row). Renders exactly one
 Context: chore, responsible_member, done_this_period (bool), overdue
 (falsy for now; #13 gives it a real value / styling), error (falsy;
 #11 sets it when no acting member could be resolved so nothing was recorded).
+
+The mark-done <button> carries `hx-preserve` and a stable, state-encoded id
+so the board poll's 10s innerHTML swap (#12) moves the live node instead of
+recreating it — keyboard focus and an in-flight submit survive a refresh. The
+id encodes done-state, so a genuine state change elsewhere still rebuilds the
+button on the next tick.
 {% endcomment %}
 <li class="chore-row{% if done_this_period %} chore-row--done{% endif %}{% if overdue %} chore-row--overdue{% endif %}">
   <div class="chore-row__info">
@@ -16,6 +22,8 @@ Context: chore, responsible_member, done_this_period (bool), overdue
   <form class="chore-row__done" method="post" action="{% url 'chores:chore_complete' chore.pk %}">
     {% csrf_token %}
     <button type="submit" class="chore-row__done-btn"
+            id="chore-done-btn-{{ chore.pk }}-{{ done_this_period|yesno:'done,todo' }}"
+            hx-preserve="true"
             hx-post="{% url 'chores:chore_complete' chore.pk %}"
             hx-target="closest li"
             hx-swap="outerHTML">

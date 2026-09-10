@@ -962,9 +962,80 @@ class BoardPollWiringTest(TestCase):
         self.assertIsNotNone(container)
         self.assertIn(f'hx-get="{list_url}"', container.group(0))
 
-    def test_poll_container_scopes_requests_so_user_posts_are_not_dropped(self):
+    def _poll_container(self):
         response = self.client.get(reverse("chores:board"))
         body = response.content.decode()
-        container = re.search(r"<div\b[^>]*\bhx-trigger=\"every 10s\"[^>]*>", body)
-        self.assertIsNotNone(container)
-        self.assertIn("hx-sync=", container.group(0))
+        match = re.search(r"<div\b[^>]*\bhx-trigger=\"every 10s\"[^>]*>", body)
+        self.assertIsNotNone(match)
+        return match.group(0)
+
+    def test_poll_container_swap_replaces_list_contents(self):
+        # The container replaces its own contents on every tick, so the
+        # daily / weekly list is fully re-rendered from the fragment.
+        self.assertIn('hx-swap="innerHTML"', self._poll_container())
+
+    def test_poll_uses_queue_all_so_a_user_post_is_never_dropped(self):
+        # `queue all` keeps every queued request; `queue last` / `abort` could
+        # discard a user POST that was forced to wait behind an in-flight poll.
+        container = self._poll_container()
+        self.assertIn(
+            'hx-sync="closest .board__poll:queue all"', container
+        )
+        self.assertNotIn("queue last", container)
+        self.assertNotIn(":abort", container)
+        self.assertNotIn(":drop", container)
+
+    def test_mark_done_control_is_hx_preserved_with_a_stable_id(self):
+        # A focused / in-flight control inside the polled list must survive the
+        # innerHTML swap: htmx keeps the live node when it carries hx-preserve
+        # plus an id present in both the old and new markup.
+        alex = Member.objects.create(name="Alex")
+        chore = Chore.objects.create(
+            name="Vacuum", frequency=Chore.Frequency.DAILY
+        )
+        RotationSlot.objects.create(chore=chore, member=alex, position=0)
+        response = self.client.get(reverse("chores:board_list"))
+        body = response.content.decode()
+        button = re.search(r"<button\b[^>]*chore-row__done-btn[^>]*>", body)
+        self.assertIsNotNone(button)
+        self.assertIn('hx-preserve="true"', button.group(0))
+        self.assertIn(
+            f'id="chore-done-btn-{chore.pk}-todo"', button.group(0)
+        )
+
+    def test_mark_done_preserve_id_tracks_done_state(self):
+        # The preserve id encodes done-state, so a real change elsewhere still
+        # rebuilds that one button on the next tick.
+        alex = Member.objects.create(name="Alex")
+        chore = Chore.objects.create(
+            name="Vacuum", frequency=Chore.Frequency.DAILY
+        )
+        RotationSlot.objects.create(chore=chore, member=alex, position=0)
+        Completion.objects.create(chore=chore, member=alex)
+        response = self.client.get(reverse("chores:board_list"))
+        self.assertContains(response, f'id="chore-done-btn-{chore.pk}-done"')
+
+    def test_board_page_and_fragment_render_the_same_list_markup(self):
+        # Pins "cannot drift": the fragment body appears verbatim inside the
+        # board page's poll container, not just a same-named divergent copy.
+        # CSRF hidden-input values differ per response, so normalise them out.
+        alex = Member.objects.create(name="Alex")
+        chore = Chore.objects.create(
+            name="Vacuum", frequency=Chore.Frequency.DAILY
+        )
+        RotationSlot.objects.create(chore=chore, member=alex, position=0)
+
+        def strip_csrf(html):
+            return re.sub(
+                r'name="csrfmiddlewaretoken" value="[^"]*"',
+                'name="csrfmiddlewaretoken"',
+                html,
+            )
+
+        fragment = strip_csrf(
+            self.client.get(reverse("chores:board_list")).content.decode()
+        ).strip()
+        page = strip_csrf(
+            self.client.get(reverse("chores:board")).content.decode()
+        )
+        self.assertIn(fragment, page)

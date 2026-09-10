@@ -7,28 +7,44 @@
   {% comment %}
   Poll container. It re-fetches `chores:board_list` every 10s
   (`hx-trigger="every 10s"`, the interval pinned by `_docs/design-system.md`)
-  and swaps the result into its own contents (`hx-swap="innerHTML"`). It
-  {% include %}s the exact same `_board_list.html` the endpoint returns, so the
-  first paint and every polled refresh are byte-identical.
+  and swaps the result into its own contents (`hx-swap="innerHTML"`, so every
+  refresh replaces the whole daily / weekly list). It {% include %}s the exact
+  same `_board_list.html` the endpoint returns, so the first paint and every
+  polled refresh render from one template.
 
-  Poll safety — `hx-sync="closest .board__poll:queue last"`:
-  htmx inherits `hx-sync` down to the mark-done form / button in `_chore_row.html`
-  (#11) and the swap form (#15, when present). `closest .board__poll` resolves to
-  THIS container from the poll itself and from every inner form, so the poll and
-  all in-list user actions share one request queue. `queue last` means a request
-  that arrives while another is in flight is queued, never dropped and never
-  aborted: a user-initiated mark-done / swap POST that starts mid-poll is queued
-  and then runs; a poll that fires while a user POST is in flight is queued and
-  runs after, by which point the POST has already swapped its own row, so the
-  refresh has nothing to clobber. (`abort` was rejected: it has a race window
-  where a user POST is dropped if a poll happens to be in flight when the user
-  taps — the AC forbids that.)
+  Poll safety has two independent parts:
+
+  1. A user-initiated POST is never dropped — `hx-sync="closest .board__poll:queue all"`.
+     htmx inherits `hx-sync` down to the mark-done button in `_chore_row.html`
+     (#11) and the future swap form (#15). `closest .board__poll` resolves to
+     THIS container from the poll itself and from every inner control, so the
+     poll and all in-list user actions share one request queue. `queue all`
+     keeps every queued request in arrival order and discards none: a user
+     mark-done / swap POST that fires mid-poll is queued and then runs; a poll
+     tick that fires mid-POST is queued and runs after. Nothing is ever aborted
+     or discarded, so a user POST can never be the request that gets dropped.
+     (`queue last` was wrong here: it keeps only the most recently queued
+     request, so a user POST queued behind an in-flight poll could be discarded
+     by a later tick. `abort` was wrong: it races a user tap against an
+     in-flight poll.)
+
+  2. A focused / in-flight control inside the list survives the innerHTML swap —
+     `hx-preserve` on the mark-done <button> in `_chore_row.html`, keyed by a
+     stable, state-encoded id (`chore-done-btn-<pk>-done|todo`). When a poll tick
+     replaces the list, htmx moves the existing button node into the new markup
+     instead of recreating it, so keyboard focus and an in-flight submission are
+     kept. Boundary: the id encodes done-state, so if a chore's done-state
+     changes in another session the next tick DOES rebuild that one button
+     (correct, and focus loss is acceptable because the state changed); when the
+     state is unchanged the button is left untouched. The rest of the row (name,
+     member, overdue border) always refreshes. #15's swap form should get the
+     same `hx-preserve` treatment when it lands.
   {% endcomment %}
   <div class="board__poll"
        hx-get="{% url 'chores:board_list' %}"
        hx-trigger="every 10s"
        hx-swap="innerHTML"
-       hx-sync="closest .board__poll:queue last">
+       hx-sync="closest .board__poll:queue all">
     {% include "chores/partials/_board_list.html" %}
   </div>
 </section>
